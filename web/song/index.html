@@ -29,6 +29,13 @@
   label { font-size: 14px; }
   #status { margin-top: 12px; min-height: 1.6em; }
   #status.bad { color: var(--bad); font-weight: 600; }
+  #name { font-family: inherit; font-size: 16px; margin-bottom: 8px; }
+  #list { list-style: none; margin: 0; padding: 0; }
+  #list li { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  #list li.on .t { color: var(--accent); }
+  #list .t { flex: 1; min-width: 0; background: none; color: var(--fg); padding: 4px 0; text-align: left; border-radius: 0; }
+  #list .t span { display: block; color: var(--dim); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #list button.x { background: none; color: var(--dim); padding: 4px 10px; font-size: 20px; line-height: 1; }
 </style>
 </head>
 <body>
@@ -39,16 +46,25 @@
     (with ENV / LFO when it needs the minor or the 7th). Hold ENV + LFO for 1.5 s to go back to the top.
     Chrome (Android or computer) or Edge, with the FM-1 on USB.</p>
 
+  <section id="mine">
+  <h2>My songs</h2>
+  <ul id="list"></ul>
+  <p class="small" id="empty">Songs you save show up here: tap one to load it, then Send.</p>
+  </section>
+
   <h2>1 · Paste the chord sheet</h2>
   <textarea id="sheet" placeholder="Copy a song from a chord site and paste it here: chords above the lyrics, [C]inline chords, or just C Am F G" aria-label="Chord sheet"></textarea>
   <div class="row">
+    <button id="paste" class="quiet">Paste</button>
     <button id="get">Get the chords</button>
     <label><input type="checkbox" id="merge" checked> Merge repeats</label>
   </div>
 
   <h2>2 · Check the song</h2>
+  <input type="text" id="name" placeholder="Song name" aria-label="Song name">
   <textarea id="song" aria-label="The song's chords, in order" placeholder="C Am F G"></textarea>
   <p class="small" id="info"></p>
+  <div class="row"><button id="save" class="quiet">Save to my songs</button></div>
 
   <h2>3 · Send it</h2>
   <select id="port" aria-label="MIDI output"></select>
@@ -142,12 +158,87 @@ $("get").onclick = () => {
   if ($("merge").checked) cs = merged(cs);
   if (!cs.length) { status("No chords found in that. Paste the sheet with its chord lines, or type them in step 2.", true); return; }
   $("song").value = cs.map(c => c.src.replace(/♯/g, "#").replace(/♭/g, "b")).join(" ");
+  if (!$("name").value.trim()) $("name").value = guessName($("sheet").value);
   status("");
   showInfo();
 };
 $("song").oninput = showInfo;
 try { $("song").value = localStorage.getItem("fomni-song") || ""; } catch (e) { /* no storage */ }
 showInfo();
+
+/* the title: the first short line that isn't chords or a [Section] */
+function guessName(text) {
+  for (const l of text.split(/\r?\n/).map(x => x.trim())) {
+    if (!l || l.length > 60 || /^\[.*\]$/.test(l) || /:\s*$/.test(l)) continue;
+    const toks = l.split(/\s+/);
+    if (toks.every(t => chord(t.replace(/^\(|\)$/g, "")) || SKIP.test(t))) continue;
+    return l.replace(/\s+(chords|tabs?|ukulele|guitar)(\s+by\s+.*)?$/i, "").slice(0, 60);
+  }
+  return "";
+}
+
+$("paste").onclick = async () => {
+  try {
+    $("sheet").value = await navigator.clipboard.readText();
+    $("name").value = "";
+    $("get").onclick();
+  } catch (e) {
+    status("Couldn't read the clipboard: long-press in the box and paste instead.", true);
+  }
+};
+
+/* my songs: kept in this browser */
+function songs() { try { return JSON.parse(localStorage.getItem("fomni-songs") || "[]"); } catch (e) { return []; } }
+function keep(list) {
+  try { localStorage.setItem("fomni-songs", JSON.stringify(list)); return true; } catch (e) { return false; }
+}
+function showList() {
+  const list = songs(), ul = $("list"), cur = $("name").value.trim();
+  ul.innerHTML = "";
+  $("empty").hidden = list.length > 0;
+  list.forEach((sg, i) => {
+    const li = document.createElement("li"), t = document.createElement("button"), x = document.createElement("button");
+    if (sg.name === cur) li.className = "on";
+    t.className = "t";
+    t.textContent = sg.name;
+    const sub = document.createElement("span");
+    sub.textContent = sg.chords;
+    t.append(sub);
+    t.onclick = () => {
+      $("name").value = sg.name;
+      $("song").value = sg.chords;
+      showInfo();
+      showList();
+      status(`Loaded "${sg.name}". Tap Send to FM-1.`);
+    };
+    x.className = "x";
+    x.textContent = "×";
+    x.setAttribute("aria-label", `Delete ${sg.name}`);
+    x.onclick = () => {
+      if (!confirm(`Delete "${sg.name}"?`)) return;
+      const l = songs();
+      l.splice(i, 1);
+      keep(l);
+      showList();
+    };
+    li.append(t, x);
+    ul.append(li);
+  });
+}
+$("save").onclick = () => {
+  const name = $("name").value.trim(), chords = $("song").value.trim().replace(/\s+/g, " ");
+  if (!name) { status("Give the song a name first.", true); $("name").focus(); return; }
+  if (!chords) { status("No chords to save.", true); return; }
+  const list = songs().filter(x => x.name !== name);
+  list.unshift({name, chords});
+  const ok = keep(list);
+  status(ok ? `Saved "${name}".` : "Couldn't save: this browser isn't keeping data.", !ok);
+  showList();
+};
+$("name").oninput = showList;
+try { $("name").value = localStorage.getItem("fomni-name") || ""; } catch (e) { /* no storage */ }
+$("name").addEventListener("input", () => { try { localStorage.setItem("fomni-name", $("name").value); } catch (e) { /* */ } });
+showList();
 
 /* MIDI */
 let midi = null;
