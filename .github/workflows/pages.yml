@@ -1,57 +1,69 @@
 # SPDX-License-Identifier: GPL-3.0-only
-# The site on GitHub Pages (tools/make_pages.py): the installer with the release's package, and the Song page.
-# After each release (the build workflow for a tag), so a fork gets its own installer: open
-# https://USER.github.io/fm1-fomni/install/ in Chrome (Android too) with the FM-1 on USB.
-# Settings > Pages > Source: GitHub Actions. Without Emscripten here, the site leaves out the emulator.
-name: Publish the site
+# A fork's own site on GitHub Pages, no tag needed: on each push to main (or by hand), the shared FM-1 builder
+# builds a release package from this commit, and tools/make_pages.py makes the site around it: the installer
+# with that package, and the Song page. Open https://USER.github.io/REPO/install/ in Chrome (Android too)
+# with the FM-1 on USB. Settings > Pages > Source: GitHub Actions. No Emscripten here: no emulator on the site.
+name: Build and publish the site
 
 on:
-  workflow_run:
-    workflows: ['Build and attest firmware']
-    types: [completed]
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag (e.g. v0.4.2-song)'
-        required: true
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
+  firmware:
+    uses: zvenson/fm1-build/.github/workflows/build.yml@v1
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    with:
+      sdk: true
+      tests-block: true
+      build: |
+        set -euo pipefail
+        sudo apt-get install -y -qq libfribidi0
+        version="0.4.2-song${GITHUB_RUN_NUMBER}"
+        ./build.sh --release "$version"
+        mkdir -p build/release-assets
+        cp "build/omni-$version.fwsc" build/release-assets/
+        cp "build/omni-$version.fwsc" build/omni.fwsc
+      test: |
+        set -euo pipefail
+        sh tests/run_tests.sh
+      packages: build/release-assets/*.fwsc
+
   site:
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v'))
+    needs: firmware
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          ref: ${{ github.event.inputs.tag || github.event.workflow_run.head_branch }}
-      - name: The release's package
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.inputs.tag || github.event.workflow_run.head_branch }}
-        run: |
-          set -euo pipefail
-          mkdir -p dl
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'omni-*.fwsc' --dir dl
-          ls dl
+          name: packages
+          path: dl
       - name: Make the site
         env:
-          TAG: ${{ github.event.inputs.tag || github.event.workflow_run.head_branch }}
           OMNI_NO_EMU: '1'
         run: |
           set -euo pipefail
-          pkg=$(ls dl/omni-*.fwsc | grep -v -- '-app' | head -1)
-          python3 tools/make_pages.py "$pkg" "${TAG#v}" site
+          pkg=$(find dl -name 'omni-*.fwsc' | head -1)
+          version=$(basename "$pkg" .fwsc)
+          python3 tools/make_pages.py "$pkg" "${version#omni-}" site
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
