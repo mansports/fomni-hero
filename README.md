@@ -82,7 +82,9 @@ the minor, the 7th or both, and the screen shows NEXT and the chord. Playing the
 does for a C); playing the chord after next skips one; anything else waits. At the end it goes back to the top,
 and holding ENV and LFO for 1.5 seconds with no chord does too; tapping them together steps back one chord.
 The screen shows where you are (3/24). The page keeps your songs in the browser (tap one to send it), with a
-backup file, and transposes a song before you send it. The song is saved with the rest.
+backup file, and transposes a song before you send it. Its lyrics view shows the sheet with the chord you're on
+lit: the FM-1 sends where it is as it moves (CC 102 then CC 103 on channel 16: the chord awaited, high and low
+7 bits; 127 127 no song), `F0 7D 53 47 04 hi lo F7` jumps to a chord, `F0 7D 53 47 05 F7` asks where it is. The song is saved with the rest.
 
 Chords FoMni-1 has no type for are played as the nearest one (Em9 as Em7, D/F# as D, Dsus2 as D); the page
 lists them. The SysEx: `F0 7D 53 47 01 chords.. F7`, each chord one byte, root × 9 + type (root 0 = C, as the

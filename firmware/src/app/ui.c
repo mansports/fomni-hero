@@ -246,8 +246,13 @@ static void sound_chord(void) { om_chord(ui.root, ui.type); }
 #define SONG_SX0 0x7Du                           /* F0 7D 53 47 cmd .. F7 ("SG"); 7D: non-commercial */
 #define SONG_SX1 0x53u
 #define SONG_SX2 0x47u
-enum { SONG_SET = 1, SONG_TOP = 2, SONG_SET_KEYS = 3 };   /* 3: as 1, and the song's chords on the keys */
+enum { SONG_SET = 1, SONG_TOP = 2, SONG_SET_KEYS = 3,   /* 3: as 1, and the song's chords on the keys */
+       SONG_GOTO = 4, SONG_WHERE = 5 };          /* 4 hi lo: to that chord; 5: say where it is */
+/* where it is goes out whenever it moves (and on WHERE), so a page can follow: CC 102 (song_pos >> 7) then
+ * CC 103 (song_pos & 127) on channel 16; 127 127 when there is no song */
+#define SONG_CH 0xBFu
 static uint8_t song_pos;
+static int16_t song_told = -2;                   /* the position last sent, -2: tell again */
 static int8_t song_pad = -1;                     /* the black key that blinks, -1 none */
 static uint8_t song_mods;                        /* and the modifiers that blink with it: 1 ENV, 2 LFO */
 
@@ -396,9 +401,30 @@ int ui_song_frame(const uint8_t *p, uint32_t n)
             say("SONG", "CLEARED");
     } else if (p[3] == SONG_TOP) {
         say("SONG", "FROM THE TOP");
+    } else if (p[3] == SONG_GOTO && n >= 6u && proj.song_n) {
+        c = (uint32_t)p[4] << 7 | p[5];
+        song_pos = (uint8_t)(c < proj.song_n ? c : 0u);
+        song_aim();
+        return 1;
+    } else if (p[3] == SONG_WHERE) {
+        song_told = -2;
+        return 1;
+    } else {
+        return 1;                                /* ours, not known: left alone */
     }
     song_top();
     return 1;
+}
+
+static void song_tell(void)                      /* the position out, when it changed (main loop) */
+{
+    int16_t at = proj.song_n ? (int16_t)song_pos : -1;
+    uint32_t hi = at < 0 ? 127u : (uint32_t)at >> 7, lo = at < 0 ? 127u : (uint32_t)at & 127u;
+    if (at == song_told)
+        return;
+    song_told = at;
+    plat_midi_out(SONG_CH >> 4 | SONG_CH << 8 | 102u << 16 | hi << 24);
+    plat_midi_out(SONG_CH >> 4 | SONG_CH << 8 | 103u << 16 | lo << 24);
 }
 
 static void song_buttons(void)                   /* ENV + LFO with no chord: a tap back one, held 1.5 s from the top */
@@ -1000,6 +1026,7 @@ static void leds(void)
     }
     plat_glow(proj.leds == 1);
     plat_leds(b, k);
+    song_tell();
 }
 
 /* AUTOSAVE: a few seconds after a change, when nothing sounds and nothing is touched (a flash erase

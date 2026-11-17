@@ -413,6 +413,8 @@ static int expect(const char *what, const char *val)
         got = proj.song_n;
     else if (!strcmp(what, "song_pad"))
         got = song_pad;
+    else if (!strcmp(what, "song_told"))
+        got = song_told;
     else if (!strcmp(what, "song_mods"))
         got = song_mods;
     else if (!strcmp(what, "hold"))

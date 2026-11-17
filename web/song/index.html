@@ -55,13 +55,29 @@
   #list .t span { display: block; color: var(--dim); font-size: 13px; font-weight: 400; overflow: hidden;
                   text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; }
   #list button.x { background: none; color: var(--dim); padding: 4px 10px; font-size: 20px; line-height: 1; box-shadow: none; }
+  #play { position: fixed; inset: 0; z-index: 10; background: var(--bg); display: flex; flex-direction: column; }
+  #play[hidden] { display: none; }
+  #play header { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line);
+                 background: rgba(5, 5, 8, .92); }
+  #play .now { flex: 1; display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  #pnow { font-size: 34px; font-weight: 800; color: var(--pink); text-shadow: 0 0 10px rgba(255, 43, 214, .8); min-width: 2ch; }
+  #pnext { font-size: 22px; font-weight: 700; color: var(--cyan); text-shadow: 0 0 10px rgba(0, 240, 255, .6); }
+  #ppos { margin-left: auto; color: var(--dim); font-size: 13px; }
+  #pclose { background: none; box-shadow: none; color: var(--dim); font-size: 26px; padding: 0 6px; line-height: 1; }
+  #lyrics { flex: 1; overflow: auto; margin: 0; padding: 16px 14px 50vh; font: 14px/1.45 ui-monospace, Menlo, monospace;
+            white-space: pre; color: var(--fg); }
+  #lyrics b { font-weight: 700; color: var(--dim); border-radius: 4px; cursor: pointer; transition: color .15s, background .15s; }
+  #lyrics b.cur { color: #12000e; background: var(--pink); box-shadow: 0 0 0 3px var(--pink), 0 0 16px 3px rgba(255, 43, 214, .7); }
+  #lyrics b.nxt { color: var(--cyan); text-shadow: 0 0 8px rgba(0, 240, 255, .8); box-shadow: 0 0 0 3px #050508, 0 0 0 4px var(--cyan); }
+  #lyrics .note { display: block; white-space: normal; color: var(--dim); font-family: inherit; margin-bottom: 12px; }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
 <main>
   <h1>Song</h1>
-  <p class="small">Paste a chord sheet, send its chords to FoMni-1. They go on the black keys in the order they come
+  <p class="small">Paste a chord sheet, send its chords to FoMni-1. Tap a saved song to send it and open its lyrics: the
+    chord you're on lights up as you play, and tapping a chord there jumps the FM-1 to it. They go on the black keys in the order they come
     (your own chords come back when you clear it). As you play, the black key of the next chord blinks
     (with ENV / LFO when it needs the minor or the 7th). Tap ENV + LFO together to step back one chord; hold them 1.5 s to go back to the top.
     Chrome (Android or computer) or Edge, with the FM-1 on USB.</p>
@@ -104,9 +120,17 @@
     <button id="send">Send to FM-1</button>
     <button id="top" class="quiet">From the top</button>
     <button id="clear" class="quiet">Clear</button>
+    <button id="playbtn" class="quiet">Lyrics view</button>
   </div>
   <p id="status" role="status"></p>
 </main>
+<div id="play" hidden>
+  <header>
+    <div class="now"><span id="pnow"></span><span id="pnext"></span><span id="ppos"></span></div>
+    <button id="pclose" aria-label="Close the lyrics view">×</button>
+  </header>
+  <pre id="lyrics"></pre>
+</div>
 <script>
 "use strict";
 /* chord names -> FoMni-1's nine types; SysEx F0 7D 53 47 01 (root * 9 + type).. F7 (firmware ui.c SONG) */
@@ -114,7 +138,8 @@ const NOTE = {C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11};
 const NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
 const TYPES = ["", "m", "7", "M7", "m7", "dim", "aug", "sus4", "add9"];
 const MAJ = 0, MIN = 1, DOM7 = 2, MAJ7 = 3, MIN7 = 4, DIM = 5, AUG = 6, SUS4 = 7, ADD9 = 8;
-const SX = [0xF0, 0x7D, 0x53, 0x47], SET = 1, TOP = 2, SET_KEYS = 3, MAX = 255;
+let shifted = 0;                     /* semitones the song field is from its sheet */
+const SX = [0xF0, 0x7D, 0x53, 0x47], SET = 1, TOP = 2, SET_KEYS = 3, GOTO = 4, WHERE = 5, MAX = 255;
 
 /* the quality after the root: [type, exact] */
 function quality(q) {
@@ -148,22 +173,32 @@ function chord(tok) {
 }
 
 const SKIP = /^(x\d+|\d+x|\(x\d+\)|-+|\/+|%|\.+|N\.?C\.?|\|+|:?\|\|?:?)$/i;
-/* a chord sheet -> its chords in order: [ch]..[/ch] (Ultimate Guitar), [C]inline, or lines of nothing but chords */
-function extract(text) {
+/* a chord sheet -> its chords in order, each with where it is (line, from, to): [ch]..[/ch] (Ultimate Guitar),
+ * [C]inline, or lines of nothing but chords */
+function locate(text) {
   const out = [];
-  for (let line of text.split(/\r?\n/)) {
-    const ug = [...line.matchAll(/\[ch\](.*?)\[\/ch\]/g)].map(x => chord(x[1].trim())).filter(Boolean);
-    if (ug.length) { out.push(...ug); continue; }
-    const inl = [...line.matchAll(/\[([^\]\s]+)\]/g)].map(x => chord(x[1])).filter(Boolean);
-    if (inl.length) { out.push(...inl); continue; }
-    line = line.replace(/^\s*[A-Za-z][A-Za-z0-9 ]*:\s*/, "").replace(/[|]/g, " ");   /* "Intro: C G" */
-    const toks = line.trim().split(/\s+/).map(t => t.replace(/^\(|\)$/g, "")).filter(t => t && !SKIP.test(t));
-    if (!toks.length) continue;
-    const cs = toks.map(chord);
-    if (cs.every(Boolean)) out.push(...cs);
-  }
+  text.split(/\r?\n/).forEach((line, ln) => {
+    const take = (re, g) => [...line.matchAll(re)].map(x => Object.assign({}, chord(x[g].trim()),
+      {ln, a: x.index, b: x.index + x[0].length, ok: !!chord(x[g].trim())})).filter(c => c.ok);
+    const ug = take(/\[ch\](.*?)\[\/ch\]/g, 1);
+    if (ug.length) { out.push(...ug); return; }
+    const inl = take(/\[([^\]\s]+)\]/g, 1);
+    if (inl.length) { out.push(...inl); return; }
+    const lab = /^\s*[A-Za-z][A-Za-z0-9 ]*:\s*/.exec(line), from = lab ? lab[0].length : 0;   /* "Intro: C G" */
+    const toks = [];
+    for (const m of line.slice(from).matchAll(/[^\s|]+/g)) {
+      let t = m[0], a = from + m.index;
+      if (t.startsWith("(")) { t = t.slice(1); a++; }
+      if (t.endsWith(")")) t = t.slice(0, -1);
+      if (t && !SKIP.test(t)) toks.push({t, a, b: a + t.length});
+    }
+    if (!toks.length) return;
+    const cs = toks.map(x => chord(x.t));
+    if (cs.every(Boolean)) cs.forEach((c, i) => out.push(Object.assign(c, {ln, a: toks[i].a, b: toks[i].b})));
+  });
   return out;
 }
+function extract(text) { return locate(text); }
 
 function merged(cs) { return cs.filter((c, i) => !i || c.name !== cs[i - 1].name); }
 
@@ -190,6 +225,7 @@ $("get").onclick = () => {
   if (!cs.length) { status("No chords found in that. Paste the sheet with its chord lines, or type them in step 2.", true); return; }
   $("song").value = cs.map(c => c.src.replace(/♯/g, "#").replace(/♭/g, "b")).join(" ");
   if (!$("name").value.trim()) $("name").value = guessName($("sheet").value);
+  shifted = 0;
   status("");
   showInfo();
 };
@@ -235,12 +271,16 @@ function showList() {
     const sub = document.createElement("span");
     sub.textContent = sg.chords;
     t.append(sub);
-    t.onclick = () => {
+    t.onclick = async () => {
       $("name").value = sg.name;
       $("song").value = sg.chords;
+      $("sheet").value = sg.sheet || "";
+      $("merge").checked = sg.merge !== false;
+      shifted = sg.shift || 0;
       showInfo();
       showList();
-      sendSong(`"${sg.name}" loaded. Plug in the FM-1 and tap Send to FM-1.`);
+      await sendSong(`"${sg.name}" loaded. Plug in the FM-1 and tap Send to FM-1.`);
+      openPlay();
     };
     x.className = "x";
     x.textContent = "×";
@@ -261,7 +301,7 @@ $("save").onclick = () => {
   if (!name) { status("Give the song a name first.", true); $("name").focus(); return; }
   if (!chords) { status("No chords to save.", true); return; }
   const list = songs().filter(x => x.name !== name);
-  list.unshift({name, chords});
+  list.unshift({name, chords, sheet: $("sheet").value, shift: shifted, merge: $("merge").checked});
   const ok = keep(list);
   status(ok ? `Saved "${name}".` : "Couldn't save: this browser isn't keeping data.", !ok);
   showList();
@@ -279,7 +319,6 @@ function shiftTok(tok, n) {
   const m = /^([A-G][#b]?)([^/]*)(?:\/([A-G][#b]?))?$/.exec(tok);
   return sh(m[1]) + m[2] + (m[3] ? "/" + sh(m[3]) : "");
 }
-let shifted = 0;
 function transpose(n) {
   $("song").value = $("song").value.split(/(\s+)/).map(t => /\s/.test(t) ? t : shiftTok(t, n)).join("");
   shifted += n;
@@ -320,14 +359,92 @@ $("importfile").onchange = async () => {
   }
 };
 
+/* the lyrics view: the sheet with its chords lit as the FM-1 goes (CC 102 / 103 on channel 16: the chord it
+ * waits for); tap a chord to go there */
+const esc = t => t.replace(/[&<>]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"})[c]);
+let view = null, wake = null;
+function openPlay() {
+  const sheet = $("sheet").value.trim() ? $("sheet").value : $("song").value, plain = !$("sheet").value.trim();
+  const raw = locate(sheet), merge = !plain && $("merge").checked, map = [];
+  let m = -1;
+  raw.forEach((c, i) => { if (!merge || !i || c.name !== raw[i - 1].name) m++; map.push(m); });
+  const field = songChords().filter(x => x[1]).map(x => x[1]);
+  const ok = m + 1 === field.length && raw.length > 0;
+  const lines = sheet.split(/\r?\n/), html = [];
+  if (!ok && raw.length) html.push('<span class="note">The chord list was edited, so it no longer matches the sheet: the chords here won\'t light up.</span>');
+  if (!raw.length) html.push('<span class="note">No chords in this sheet.</span>');
+  let k = 0;
+  lines.forEach((line, ln) => {
+    let out = "", at = 0;
+    while (k < raw.length && raw[k].ln === ln) {
+      const c = raw[k];
+      out += esc(line.slice(at, c.a)) + `<b data-i="${map[k]}">${esc(shiftTok(c.src, shifted))}</b>`;
+      at = c.b;
+      k++;
+    }
+    html.push(out + esc(line.slice(at)));
+  });
+  $("lyrics").innerHTML = html.join("\n");
+  view = {ok, n: field.length, names: field.map(c => c.name), pos: 0};
+  $("play").hidden = false;
+  document.body.style.overflow = "hidden";
+  $("lyrics").scrollTop = 0;
+  show(0, false);
+  try { navigator.wakeLock?.request("screen").then(w => { wake = w; }).catch(() => {}); } catch (e) { /* no wake lock */ }
+  if (midi) outPort().then(o => o.send([...SX, WHERE, 0xF7])).catch(() => {});
+}
+function show(pos, scroll = true) {
+  if (!view) return;
+  view.pos = pos;
+  const n = view.n, cur = pos > 0 ? pos - 1 : -1;
+  $("pnow").textContent = cur >= 0 ? view.names[cur] : "";
+  $("pnext").textContent = n ? "→ " + view.names[pos % n] : "";
+  $("ppos").textContent = n ? `${Math.min(pos + 1, n)}/${n}` : "";
+  if (!view.ok) return;
+  for (const b of $("lyrics").querySelectorAll("b")) {
+    const i = +b.dataset.i;
+    b.classList.toggle("cur", i === cur);
+    b.classList.toggle("nxt", i === pos);
+  }
+  const el = $("lyrics").querySelector("b.nxt");
+  if (el && scroll) el.scrollIntoView({block: "center", behavior: "smooth"});
+}
+$("lyrics").onclick = e => {
+  const b = e.target.closest("b");
+  if (!b || !view || !view.ok) return;
+  const i = +b.dataset.i;
+  show(i);
+  if (midi) outPort().then(o => o.send([...SX, GOTO, i >> 7, i & 127, 0xF7])).catch(() => {});
+};
+$("pclose").onclick = () => {
+  $("play").hidden = true;
+  document.body.style.overflow = "";
+  view = null;
+  try { wake?.release(); } catch (e) { /* */ }
+  wake = null;
+};
+$("playbtn").onclick = openPlay;
+document.addEventListener("visibilitychange", () => {
+  if (view && document.visibilityState === "visible") navigator.wakeLock?.request("screen").then(w => { wake = w; }).catch(() => {});
+});
+let ccHi = 0;
+function onMidi(e) {
+  const [st, d1, d2] = e.data;
+  if (st !== 0xBF) return;
+  if (d1 === 102) ccHi = d2;
+  else if (d1 === 103 && view && !(ccHi === 127 && d2 === 127)) show(ccHi << 7 | d2);
+}
+function listen() { for (const i of midi.inputs.values()) i.onmidimessage = onMidi; }
+
 /* MIDI */
 let midi = null;
 async function outPort() {
   if (!navigator.requestMIDIAccess) throw new Error("This browser has no Web MIDI: use Chrome or Edge.");
   if (!midi) {
     midi = await navigator.requestMIDIAccess({sysex: true});
-    midi.onstatechange = fillPorts;
+    midi.onstatechange = () => { fillPorts(); listen(); };
     fillPorts();
+    listen();
   }
   const o = midi.outputs.get($("port").value);
   if (!o) throw new Error("No FM-1 found: plug it in over USB (and close anything else using its MIDI port).");
