@@ -49,7 +49,12 @@
   <section id="mine">
   <h2>My songs</h2>
   <ul id="list"></ul>
-  <p class="small" id="empty">Songs you save show up here: tap one to load it, then Send.</p>
+  <p class="small" id="empty">Songs you save show up here. Tap one to send it to the FM-1.</p>
+  <div class="row">
+    <button id="export" class="quiet">Back up</button>
+    <button id="import" class="quiet">Restore</button>
+    <input type="file" id="importfile" accept=".json,application/json" hidden>
+  </div>
   </section>
 
   <h2>1 · Paste the chord sheet</h2>
@@ -64,6 +69,12 @@
   <input type="text" id="name" placeholder="Song name" aria-label="Song name">
   <textarea id="song" aria-label="The song's chords, in order" placeholder="C Am F G"></textarea>
   <p class="small" id="info"></p>
+  <div class="row">
+    <span class="small">Transpose</span>
+    <button id="down" class="quiet" aria-label="Transpose down a semitone">−1</button>
+    <button id="up" class="quiet" aria-label="Transpose up a semitone">+1</button>
+    <span class="small">(a capo on N: +1 N times)</span>
+  </div>
   <div class="row"><button id="save" class="quiet">Save to my songs</button></div>
 
   <h2>3 · Send it</h2>
@@ -209,7 +220,7 @@ function showList() {
       $("song").value = sg.chords;
       showInfo();
       showList();
-      status(`Loaded "${sg.name}". Tap Send to FM-1.`);
+      sendSong(`"${sg.name}" loaded. Plug in the FM-1 and tap Send to FM-1.`);
     };
     x.className = "x";
     x.textContent = "×";
@@ -240,6 +251,55 @@ try { $("name").value = localStorage.getItem("fomni-name") || ""; } catch (e) { 
 $("name").addEventListener("input", () => { try { localStorage.setItem("fomni-name", $("name").value); } catch (e) { /* */ } });
 showList();
 
+/* transpose: every chord in the song field, its slash bass too; the rest of each name kept */
+function shiftTok(tok, n) {
+  if (!chord(tok)) return tok;
+  const sh = r => NAMES[(((NOTE[r[0]] + (r[1] === "#" ? 1 : r[1] === "b" ? -1 : 0) + n) % 12) + 12) % 12];
+  tok = tok.replace(/♯/g, "#").replace(/♭/g, "b");
+  const m = /^([A-G][#b]?)([^/]*)(?:\/([A-G][#b]?))?$/.exec(tok);
+  return sh(m[1]) + m[2] + (m[3] ? "/" + sh(m[3]) : "");
+}
+let shifted = 0;
+function transpose(n) {
+  $("song").value = $("song").value.split(/(\s+)/).map(t => /\s/.test(t) ? t : shiftTok(t, n)).join("");
+  shifted += n;
+  status(shifted ? `Transposed ${shifted > 0 ? "+" : ""}${shifted}` : "Back in the original key");
+  showInfo();
+}
+$("up").onclick = () => transpose(1);
+$("down").onclick = () => transpose(-1);
+$("song").addEventListener("input", () => { shifted = 0; });
+
+/* back up / restore my songs: a JSON file */
+$("export").onclick = () => {
+  const list = songs();
+  if (!list.length) { status("No songs to back up yet.", true); return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([JSON.stringify({fomniSongs: 1, songs: list}, null, 1)], {type: "application/json"}));
+  a.download = `fomni-songs-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  status(`Backed up ${list.length} song${list.length === 1 ? "" : "s"} to your downloads.`);
+};
+$("import").onclick = () => $("importfile").click();
+$("importfile").onchange = async () => {
+  const f = $("importfile").files[0];
+  $("importfile").value = "";
+  if (!f) return;
+  try {
+    const d = JSON.parse(await f.text()), got = (Array.isArray(d) ? d : d.songs || [])
+      .filter(x => x && typeof x.name === "string" && typeof x.chords === "string");
+    if (!got.length) throw new Error("no songs");
+    const names = new Set(got.map(x => x.name)), list = got.concat(songs().filter(x => !names.has(x.name)));
+    keep(list);
+    showList();
+    status(`Restored ${got.length} song${got.length === 1 ? "" : "s"}.`);
+  } catch (e) {
+    status("That file isn't a song backup from this page.", true);
+  }
+};
+
 /* MIDI */
 let midi = null;
 async function outPort() {
@@ -269,12 +329,18 @@ async function send(bytes, ok) {
     status(e.message || String(e), true);
   }
 }
-$("send").onclick = () => {
-  const cs = songChords().filter(x => x[1]).slice(0, MAX).map(x => x[1]);
+async function sendSong(offline) {   /* offline: what to say if no FM-1 (else the error) */
+  const cs = songChords().filter(x => x[1]).slice(0, MAX).map(x => x[1]), name = $("name").value.trim();
   if (!cs.length) { status("No chords to send: get them from a sheet or type them in step 2.", true); return; }
-  send([$("keys").checked ? SET_KEYS : SET, ...cs.map(c => c.root * 9 + c.type)],
-       `Sent ${cs.length} chords. The FM-1 shows SONG CHORDS ${cs.length}.`);
-};
+  try {
+    (await outPort()).send([...SX, $("keys").checked ? SET_KEYS : SET, ...cs.map(c => c.root * 9 + c.type), 0xF7]);
+    status(`Sent ${name ? `"${name}", ` : ""}${cs.length} chords. The FM-1 shows SONG CHORDS ${cs.length}.`);
+  } catch (e) {
+    if (offline) status(offline);
+    else status(e.message || String(e), true);
+  }
+}
+$("send").onclick = () => sendSong();
 $("top").onclick = () => send([TOP], "Back to the first chord.");
 $("clear").onclick = () => send([SET], "Song cleared on the FM-1: your own chords are back on the keys.");
 navigator.requestMIDIAccess && navigator.permissions?.query({name: "midi", sysex: true})

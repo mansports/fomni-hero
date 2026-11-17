@@ -80,7 +80,9 @@ song, or send one without "Put the song's chords on the black keys"; more than 1
 the minor and 7th with ENV and LFO). Then, as you play, the black key of the next chord blinks, with ENV and LFO blinking too when it needs
 the minor, the 7th or both, and the screen shows NEXT and the chord. Playing the chord's root moves it on (a C7
 does for a C); playing the chord after next skips one; anything else waits. At the end it goes back to the top,
-and holding ENV and LFO for 1.5 seconds with no chord does too. The song is saved with the rest.
+and holding ENV and LFO for 1.5 seconds with no chord does too; tapping them together steps back one chord.
+The screen shows where you are (3/24). The page keeps your songs in the browser (tap one to send it), with a
+backup file, and transposes a song before you send it. The song is saved with the rest.
 
 Chords FoMni-1 has no type for are played as the nearest one (Em9 as Em7, D/F# as D, Dsus2 as D); the page
 lists them. The SysEx: `F0 7D 53 47 01 chords.. F7`, each chord one byte, root × 9 + type (root 0 = C, as the

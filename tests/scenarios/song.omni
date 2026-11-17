@@ -54,6 +54,27 @@ midi 81 39 00
 midi 81 3C 00
 midi 81 40 00
 wait 400
+# ENV + LFO tapped together with no chord: back one
+press ENV
+press LFO
+wait 100
+release LFO
+release ENV
+wait 50
+expect song_pos 1
+said BACK ONE
+shot song_back.png
+# ENV + LFO with a chord (the m7): no step back; Am7 is an A, so it moves on to F
+press ENV
+press LFO
+wait 50
+tapkey b4
+wait 50
+release ENV
+release LFO
+wait 50
+expect type 4
+expect song_pos 2
 # ENV + LFO held 1.5 s with no chord: from the top
 press ENV
 press LFO

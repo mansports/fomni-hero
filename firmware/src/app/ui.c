@@ -240,7 +240,7 @@ static void sound_chord(void) { om_chord(ui.root, ui.type); }
 /* SONG: a song's chords, sent over USB from web/song/ (pasted from a chord site). Playing the chord it
  * waits for (its root: a C7 for a C will do) moves it on, and the black key of the next one blinks, with
  * ENV / LFO when that chord needs them. The chord after next played instead skips one (a missed change);
- * anything else waits. ENV + LFO held 1.5 s with no chord: from the top. Sent with SONG_SET_KEYS, the
+ * anything else waits. ENV + LFO with no chord: tapped together, back one; held 1.5 s, from the top. Sent with SONG_SET_KEYS, the
  * song's chords go on the black keys in the order they come (the player's own chords kept, and back when a
  * song comes without); more than 11: one key a root, its minor / 7th / m7 with ENV / LFO. */
 #define SONG_SX0 0x7Du                           /* F0 7D 53 47 cmd .. F7 ("SG"); 7D: non-commercial */
@@ -399,20 +399,38 @@ int ui_song_frame(const uint8_t *p, uint32_t n)
     return 1;
 }
 
-static void song_hold_top(void)                  /* ENV + LFO held 1.5 s, no chord: from the top */
+static void song_buttons(void)                   /* ENV + LFO with no chord: a tap back one, held 1.5 s from the top */
 {
     static uint32_t t0;
-    uint32_t both = 1u << B_ENV | 1u << B_LFO;
-    if (!proj.song_n || (ui.btn & both) != both || ui.npads_down || (ui.btn_used & both)) {
+    static uint8_t armed;                        /* both went down together, no chord yet */
+    uint32_t both = 1u << B_ENV | 1u << B_LFO, held = ui.btn & both;
+    if (!proj.song_n) {
         t0 = 0;
+        armed = 0;
         return;
     }
-    if (!t0)
-        t0 = plat_ms() | 1u;
-    else if (plat_ms() - t0 > 1500u) {
-        ui.btn_used |= both;
-        say("SONG", "FROM THE TOP");
-        song_top();
+    if (held == both && !ui.npads_down && !(ui.btn_used & both)) {
+        armed = 1;
+        if (!t0)
+            t0 = plat_ms() | 1u;
+        else if (plat_ms() - t0 > 1500u) {
+            ui.btn_used |= both;
+            armed = 0;
+            say("SONG", "FROM THE TOP");
+            song_top();
+        }
+        return;
+    }
+    t0 = 0;
+    if (held == both || (held && (ui.btn_used & held)))
+        armed = 0;                               /* a chord took them (minor / 7th / m7) */
+    else if (!held && armed) {
+        armed = 0;
+        if (!(ui.btn_used & both)) {
+            song_pos = (uint8_t)((song_pos + proj.song_n - 1u) % proj.song_n);
+            say("SONG", "BACK ONE");
+            song_aim();
+        }
     }
 }
 
@@ -651,7 +669,7 @@ static void input(void)
             else
                 pad_up((int)i);
         }
-    song_hold_top();
+    song_buttons();
     if (btn || keys || ch)
         ui.act_t = plat_ms();
     midi_in();
@@ -845,7 +863,8 @@ static void draw_main(void)
              (uint32_t)proj.par[P_TRANSPOSE] << 8 | (uint32_t)(om_chord_level * 8.0f));
     for (s = 0; s < NPADS; s++)
         h = hash(h, proj.pad_root[s] | proj.pad_type[s] << 4);
-    h = hash(h, proj.song_n ? (uint32_t)proj.song[song_pos] << 16 | song_pos << 8 | (uint8_t)song_pad : 0xFFFFFFu);
+    h = hash(hash(h, proj.song_n ? (uint32_t)proj.song[song_pos] << 16 | song_pos << 8 | (uint8_t)song_pad : 0xFFFFFFu),
+             proj.song_n);
     if (ui.view == V_RHYTHM)
         h = hash(hash(h, om_playing ? om_step : 255u), (uint32_t)proj.par[P_RHYTHM]);
     if (h == ui.sig[1])
@@ -882,6 +901,15 @@ static void draw_main(void)
             nx[q] = 0;
             cv_text(240 - 12 - text_w(&FONT_S, notes), 4, &FONT_S, notes, K_DIM);
             cv_text(240 - 12 - text_w(&FONT_S, nx), 22, &FONT_S, nx, K_HARP);
+            {                                    /* where it is: the chord awaited, of how many */
+                char at[12];
+                int32_t w;
+                itoa_u(song_pos + 1u, at);
+                w = str_len_(at);
+                at[w++] = '/';
+                itoa_u(proj.song_n, at + w);
+                cv_text(240 - 12 - text_w(&FONT_S, nx) - 8 - text_w(&FONT_S, at), 22, &FONT_S, at, K_DIM);
+            }
         } else {
             cv_text(240 - 12 - text_w(&FONT_S, notes), 14, &FONT_S, notes, K_DIM);
         }
