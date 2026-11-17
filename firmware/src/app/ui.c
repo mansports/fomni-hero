@@ -295,6 +295,8 @@ static void song_heard(void)                     /* a chord began (a button or M
         return;
     if (proj.song[song_pos] / CH_NTYPES == r)
         skip = 1;
+    else if (proj.song[(song_pos + n - 1) % n] / CH_NTYPES == r)
+        return;                                  /* the chord just played, again (F C F C: not a skip) */
     else if (n > 2 && proj.song[(song_pos + 1) % n] / CH_NTYPES == r)
         skip = 2;
     else

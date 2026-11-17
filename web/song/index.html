@@ -139,7 +139,7 @@ function quality(q) {
 
 /* one token -> {root, type, name, exact} or null (not a chord) */
 function chord(tok) {
-  tok = tok.replace(/♯/g, "#").replace(/♭/g, "b");
+  tok = tok.replace(/♯/g, "#").replace(/♭/g, "b").replace(/[*†‡^~]+$/, "");   /* "Ab*": a footnote mark */
   const m = /^([A-G])([#b]?)([^/]*)(?:\/([A-G][#b]?))?$/.exec(tok);
   if (!m || !/^(maj|min|mmaj|m|M|dim|aug|sus|add|Δ|°|ø|o|\+|-|\d|b|#|\(|\)|,)*$/.test(m[3])) return null;
   const root = (NOTE[m[1]] + (m[2] === "#" ? 1 : m[2] === "b" ? -1 : 0) + 12) % 12;
