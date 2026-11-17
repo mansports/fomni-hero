@@ -236,6 +236,121 @@ static void turn(int role, int k, int32_t e)
 /* ------------------------------------------------------------- chords --- */
 static void sound_chord(void) { om_chord(ui.root, ui.type); }
 
+/* -------------------------------------------------------------- song --- */
+/* SONG: a song's chords, sent over USB from web/song/ (pasted from a chord site). Playing the chord it
+ * waits for (its root: a C7 for a C will do) moves it on, and the black key of the next one blinks, with
+ * ENV / LFO when that chord needs them. The chord after next played instead skips one (a missed change);
+ * anything else waits. ENV + LFO held 1.5 s with no chord: from the top. */
+#define SONG_SX0 0x7Du                           /* F0 7D 53 47 cmd .. F7 ("SG"); 7D: non-commercial */
+#define SONG_SX1 0x53u
+#define SONG_SX2 0x47u
+enum { SONG_SET = 1, SONG_TOP = 2 };
+static uint8_t song_pos;
+static int8_t song_pad = -1;                     /* the black key that blinks, -1 none */
+static uint8_t song_mods;                        /* and the modifiers that blink with it: 1 ENV, 2 LFO */
+
+static int disp_root(int r) { return ((r + proj.par[P_TRANSPOSE]) % 12 + 12) % 12; }
+
+static void song_aim(void)                       /* the key (and modifiers) for the chord awaited */
+{
+    int r, t, p, any = -1, base = -1;
+    song_pad = -1;
+    song_mods = 0;
+    if (!proj.song_n)
+        return;
+    r = proj.song[song_pos] / CH_NTYPES;
+    t = proj.song[song_pos] % CH_NTYPES;
+    for (p = 0; p < NPADS; p++) {
+        if (disp_root(proj.pad_root[p]) != r)
+            continue;
+        if (proj.pad_type[p] == t) {             /* a button with that very chord */
+            song_pad = (int8_t)p;
+            return;
+        }
+        if (proj.pad_type[p] == CH_MAJ && base < 0)
+            base = p;
+        if (any < 0)
+            any = p;
+    }
+    if (base < 0)
+        base = any;
+    if (base < 0)
+        return;                                  /* no button with that root: the screen says it */
+    song_pad = (int8_t)base;
+    song_mods = t == CH_MIN ? 1u : t == CH_7 ? 2u : t == CH_M7 ? 3u : 0u;
+}
+
+static void song_top(void)
+{
+    song_pos = 0;
+    song_aim();
+}
+
+static void song_heard(void)                     /* a chord began (a button or MIDI channel 2) */
+{
+    int r = disp_root(ui.root), n = proj.song_n, skip;
+    if (!n)
+        return;
+    if (proj.song[song_pos] / CH_NTYPES == r)
+        skip = 1;
+    else if (n > 2 && proj.song[(song_pos + 1) % n] / CH_NTYPES == r)
+        skip = 2;
+    else
+        return;
+    song_pos = (uint8_t)((song_pos + skip) % n);
+    if (song_pos < skip)
+        say("SONG", "FROM THE TOP");
+    song_aim();
+}
+
+int ui_song_frame(const uint8_t *p, uint32_t n)
+{
+    uint32_t i, c;
+    char t[8];
+    if (n < 4u || p[0] != SONG_SX0 || p[1] != SONG_SX1 || p[2] != SONG_SX2)
+        return 0;
+    if (p[3] == SONG_SET) {
+        c = n - 4u;
+        if (c > SONG_MAX)
+            c = SONG_MAX;
+        for (i = 0; i < c; i++)
+            if (p[4 + i] >= 12u * CH_NTYPES) {
+                warn("SONG", "NOT LOADED");
+                return 1;
+            }
+        for (i = 0; i < c; i++)
+            proj.song[i] = p[4 + i];
+        proj.song_n = (uint8_t)c;
+        mark_dirty();
+        itoa_u(c, t);
+        if (c)
+            say("SONG CHORDS", t);
+        else
+            say("SONG", "CLEARED");
+    } else if (p[3] == SONG_TOP) {
+        say("SONG", "FROM THE TOP");
+    }
+    song_top();
+    return 1;
+}
+
+static void song_hold_top(void)                  /* ENV + LFO held 1.5 s, no chord: from the top */
+{
+    static uint32_t t0;
+    uint32_t both = 1u << B_ENV | 1u << B_LFO;
+    if (!proj.song_n || (ui.btn & both) != both || ui.npads_down || (ui.btn_used & both)) {
+        t0 = 0;
+        return;
+    }
+    if (!t0)
+        t0 = plat_ms() | 1u;
+    else if (plat_ms() - t0 > 1500u) {
+        ui.btn_used |= both;
+        say("SONG", "FROM THE TOP");
+        song_top();
+    }
+}
+
 static void pad_down(int p)
 {
     uint32_t b = ui.btn;
@@ -261,6 +376,7 @@ static void pad_down(int p)
     ui.type = (uint8_t)type;
     sound_chord();
     om_gate(1);
+    song_heard();
     if (ui.armed) {                              /* SYNC START: the rhythm starts with the chord */
         ui.armed = 0;
         om_play(1);
@@ -394,6 +510,7 @@ static void kb_update(void)
         ui.pad = -2;                             /* a chord from MIDI: no button lit */
         sound_chord();
         om_gate(1);
+        song_heard();
         if (ui.armed) {
             ui.armed = 0;
             om_play(1);
@@ -469,6 +586,7 @@ static void input(void)
             else
                 pad_up((int)i);
         }
+    song_hold_top();
     if (btn || keys || ch)
         ui.act_t = plat_ms();
     midi_in();
@@ -643,6 +761,8 @@ static void draw_pads(int32_t y0)
         int on = ui.pad == p, sel = ui.view == V_PADS && ui.pad_sel == p;
         if (sel)
             cv_round(x - 1, y0 - 1, 20, 30, 6, K_TEXT);
+        else if (song_pad == p)                  /* SONG: the next chord's button, ringed */
+            cv_round(x - 2, y0 - 2, 22, 32, 7, K_HARP);
         cv_round(x, y0, 18, 28, 5, on ? K_CHORD : K_CHORD_T);
         chord_name(proj.pad_root[p], 0, t);
         text_c(x + 9, y0 + 1, &FONT_XS, t, on ? K_WHITE : K_TEXT);
@@ -660,6 +780,7 @@ static void draw_main(void)
              (uint32_t)proj.par[P_TRANSPOSE] << 8 | (uint32_t)(om_chord_level * 8.0f));
     for (s = 0; s < NPADS; s++)
         h = hash(h, proj.pad_root[s] | proj.pad_type[s] << 4);
+    h = hash(h, proj.song_n ? (uint32_t)proj.song[song_pos] << 16 | song_pos << 8 | (uint8_t)song_pad : 0xFFFFFFu);
     if (ui.view == V_RHYTHM)
         h = hash(hash(h, om_playing ? om_step : 255u), (uint32_t)proj.par[P_RHYTHM]);
     if (h == ui.sig[1])
@@ -685,7 +806,20 @@ static void draw_main(void)
                 notes[k++] = *n++;
         }
         notes[k] = 0;
-        cv_text(240 - 12 - text_w(&FONT_S, notes), 14, &FONT_S, notes, K_DIM);
+        if (proj.song_n) {                       /* SONG: the notes up a little, the next chord under them */
+            char nx[24] = "NEXT ";
+            const char *rn = OM_NOTE_NAME[proj.song[song_pos] / CH_NTYPES], *ty = OM_TYPE_NAME[proj.song[song_pos] % CH_NTYPES];
+            int q = 5;                           /* the root as written (the song's names are after transpose) */
+            while (*rn)
+                nx[q++] = *rn++;
+            while (*ty)
+                nx[q++] = *ty++;
+            nx[q] = 0;
+            cv_text(240 - 12 - text_w(&FONT_S, notes), 4, &FONT_S, notes, K_DIM);
+            cv_text(240 - 12 - text_w(&FONT_S, nx), 22, &FONT_S, nx, K_HARP);
+        } else {
+            cv_text(240 - 12 - text_w(&FONT_S, notes), 14, &FONT_S, notes, K_DIM);
+        }
     }
     if (ui.view == V_RHYTHM)
         draw_rhythm(44, 62);
@@ -761,6 +895,13 @@ static void leds(void)
         for (i = 0; i < OM_NSTR; i++)
             if (om_str_level[i] > 0.2f)
                 k |= 1u << WHITE_K[i];
+        song_aim();                              /* SONG: the next chord's key blinks (and ENV / LFO) */
+        if (song_pad >= 0) {
+            uint32_t m = 1u << BLACK_K[song_pad];
+            k = (ui.frame / 8u) & 1u ? k | m : k & ~m;
+            if (song_mods && (ui.frame / 8u) & 1u)
+                b |= (song_mods & 1u ? 1u << B_ENV : 0u) | (song_mods & 2u ? 1u << B_LFO : 0u);
+        }
     }
     plat_glow(proj.leds == 1);
     plat_leds(b, k);
@@ -1015,6 +1156,7 @@ void ui_init(void)
     ui.root = proj.pad_root[1];                  /* C, the second button */
     ui.type = proj.pad_type[1];
     sound_chord();
+    song_top();
     lcd_fill(0, 0, 240, 240, K_BG);
 }
 

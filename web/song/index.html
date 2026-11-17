@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: GPL-3.0-only -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FoMni-1 · Song</title>
+<style>
+  :root { --bg: #faf4e8; --fg: #48392f; --dim: #6e5c4b; --accent: #b84a1e; --on-accent: #fff; --bad: #a3271b; --focus: #1f6fd1; --line: #d8cdba; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #1c1814; --fg: #f2e8d8; --dim: #b3a28e; --accent: #f28a5a; --on-accent: #2a140a; --bad: #ff8a73; --focus: #79adff; --line: #4a4036; }
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 40px 16px 48px; }
+  h1 { font-size: 24px; font-weight: 600; margin: 0 0 8px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 28px 0 8px; }
+  p { margin: 0 0 12px; }
+  .small { color: var(--dim); font-size: 13px; }
+  textarea, input[type=text], select { width: 100%; box-sizing: border-box; font: 14px/1.5 ui-monospace, Menlo, monospace;
+         background: transparent; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; }
+  textarea { height: 180px; resize: vertical; }
+  #song { height: 90px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  button { font: inherit; background: var(--accent); color: var(--on-accent); border: 0; border-radius: 999px; padding: 7px 20px; cursor: pointer; }
+  button.quiet { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+  button:disabled { opacity: .45; cursor: default; }
+  :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+  label { font-size: 14px; }
+  #status { margin-top: 12px; min-height: 1.6em; }
+  #status.bad { color: var(--bad); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Song</h1>
+  <p class="small">Paste a chord sheet, send its chords to FoMni-1. As you play, the black key of the next chord blinks
+    (with ENV / LFO when it needs the minor or the 7th). Hold ENV + LFO for 1.5 s to go back to the top.
+    Chrome or Edge, with the FM-1 on USB.</p>
+
+  <h2>1 · Paste the chord sheet</h2>
+  <textarea id="sheet" placeholder="Copy a song from a chord site and paste it here: chords above the lyrics, [C]inline chords, or just C Am F G" aria-label="Chord sheet"></textarea>
+  <div class="row">
+    <button id="get">Get the chords</button>
+    <label><input type="checkbox" id="merge" checked> Merge repeats</label>
+  </div>
+
+  <h2>2 · Check the song</h2>
+  <textarea id="song" aria-label="The song's chords, in order" placeholder="C Am F G"></textarea>
+  <p class="small" id="info"></p>
+
+  <h2>3 · Send it</h2>
+  <select id="port" aria-label="MIDI output"></select>
+  <div class="row">
+    <button id="send">Send to FM-1</button>
+    <button id="top" class="quiet">From the top</button>
+    <button id="clear" class="quiet">Clear</button>
+  </div>
+  <p id="status" role="status"></p>
+</main>
+<script>
+"use strict";
+/* chord names -> FoMni-1's nine types; SysEx F0 7D 53 47 01 (root * 9 + type).. F7 (firmware ui.c SONG) */
+const NOTE = {C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11};
+const NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
+const TYPES = ["", "m", "7", "M7", "m7", "dim", "aug", "sus4", "add9"];
+const MAJ = 0, MIN = 1, DOM7 = 2, MAJ7 = 3, MIN7 = 4, DIM = 5, AUG = 6, SUS4 = 7, ADD9 = 8;
+const SX = [0xF0, 0x7D, 0x53, 0x47], SET = 1, TOP = 2, MAX = 255;
+
+/* the quality after the root: [type, exact] */
+function quality(q) {
+  const s = q.replace(/[()]/g, "");
+  if (s === "") return [MAJ, true];
+  if (/^(maj|M|Δ)/.test(s)) return /^(maj7|M7|Δ7?)$/.test(s) ? [MAJ7, true] : [/\d/.test(s) ? MAJ7 : MAJ, s === "maj" || s === "M"];
+  if (/^(dim|°|o)/.test(s)) return [DIM, /^(dim|°|o)$/.test(s)];
+  if (/^ø/.test(s) || /^(m|min|-)7?b5/.test(s)) return [DIM, false];
+  if (/^(m|min|-)/.test(s)) {
+    const r = s.replace(/^(min|m|-)/, "");
+    if (r === "") return [MIN, true];
+    if (/^(maj|M|Δ)/.test(r)) return [MIN, false];
+    if (/^(7|9|11|13)/.test(r)) return [MIN7, r === "7"];
+    return [MIN, false];
+  }
+  if (/^(aug|\+)/.test(s)) return [AUG, /^(aug|\+)$/.test(s)];
+  if (/sus/.test(s)) return /sus2/.test(s) && !/sus4/.test(s) ? [MAJ, false] : [SUS4, /^sus4?$/.test(s)];
+  if (/^(add9|add2|2)$/.test(s)) return [ADD9, true];
+  if (/^(7|9|11|13)/.test(s)) return [DOM7, s === "7"];
+  return [MAJ, false];
+}
+
+/* one token -> {root, type, name, exact} or null (not a chord) */
+function chord(tok) {
+  tok = tok.replace(/♯/g, "#").replace(/♭/g, "b");
+  const m = /^([A-G])([#b]?)([^/]*)(?:\/([A-G][#b]?))?$/.exec(tok);
+  if (!m || !/^(maj|min|mmaj|m|M|dim|aug|sus|add|Δ|°|ø|o|\+|-|\d|b|#|\(|\)|,)*$/.test(m[3])) return null;
+  const root = (NOTE[m[1]] + (m[2] === "#" ? 1 : m[2] === "b" ? -1 : 0) + 12) % 12;
+  const [type, exact] = quality(m[3]);
+  return {root, type, name: NAMES[root] + TYPES[type], exact: exact && !m[4], src: tok};
+}
+
+const SKIP = /^(x\d+|\d+x|\(x\d+\)|-+|\/+|%|\.+|N\.?C\.?|\|+|:?\|\|?:?)$/i;
+/* a chord sheet -> its chords in order: [ch]..[/ch] (Ultimate Guitar), [C]inline, or lines of nothing but chords */
+function extract(text) {
+  const out = [];
+  for (let line of text.split(/\r?\n/)) {
+    const ug = [...line.matchAll(/\[ch\](.*?)\[\/ch\]/g)].map(x => chord(x[1].trim())).filter(Boolean);
+    if (ug.length) { out.push(...ug); continue; }
+    const inl = [...line.matchAll(/\[([^\]\s]+)\]/g)].map(x => chord(x[1])).filter(Boolean);
+    if (inl.length) { out.push(...inl); continue; }
+    line = line.replace(/^\s*[A-Za-z][A-Za-z0-9 ]*:\s*/, "").replace(/[|]/g, " ");   /* "Intro: C G" */
+    const toks = line.trim().split(/\s+/).map(t => t.replace(/^\(|\)$/g, "")).filter(t => t && !SKIP.test(t));
+    if (!toks.length) continue;
+    const cs = toks.map(chord);
+    if (cs.every(Boolean)) out.push(...cs);
+  }
+  return out;
+}
+
+function merged(cs) { return cs.filter((c, i) => !i || c.name !== cs[i - 1].name); }
+
+/* the song field: FoMni names (or any chord names) separated by spaces */
+function songChords() { return $("song").value.split(/[\s,|]+/).filter(Boolean).map(t => [t, chord(t)]); }
+
+const $ = id => document.getElementById(id);
+function status(t, bad) { $("status").textContent = t; $("status").className = bad ? "bad" : ""; }
+
+function showInfo() {
+  const cs = songChords(), bad = cs.filter(x => !x[1]).map(x => x[0]);
+  const approx = [...new Set(cs.filter(x => x[1] && !x[1].exact).map(x => `${x[0]} → ${x[1].name}`))];
+  let t = `${cs.length} chord${cs.length === 1 ? "" : "s"}`;
+  if (cs.length > MAX) t += ` (only the first ${MAX} fit)`;
+  if (approx.length) t += `. FoMni-1 plays: ${approx.join(", ")}`;
+  if (bad.length) t += `. Not chords, left out: ${bad.join(", ")}`;
+  $("info").textContent = cs.length ? t + "." : "";
+  try { localStorage.setItem("fomni-song", $("song").value); } catch (e) { /* no storage: fine */ }
+}
+
+$("get").onclick = () => {
+  let cs = extract($("sheet").value);
+  if ($("merge").checked) cs = merged(cs);
+  if (!cs.length) { status("No chords found in that. Paste the sheet with its chord lines, or type them in step 2.", true); return; }
+  $("song").value = cs.map(c => c.src.replace(/♯/g, "#").replace(/♭/g, "b")).join(" ");
+  status("");
+  showInfo();
+};
+$("song").oninput = showInfo;
+try { $("song").value = localStorage.getItem("fomni-song") || ""; } catch (e) { /* no storage */ }
+showInfo();
+
+/* MIDI */
+let midi = null;
+async function outPort() {
+  if (!navigator.requestMIDIAccess) throw new Error("This browser has no Web MIDI: use Chrome or Edge.");
+  if (!midi) {
+    midi = await navigator.requestMIDIAccess({sysex: true});
+    midi.onstatechange = fillPorts;
+    fillPorts();
+  }
+  const o = midi.outputs.get($("port").value);
+  if (!o) throw new Error("No FM-1 found: plug it in over USB (and close anything else using its MIDI port).");
+  return o;
+}
+function fillPorts() {
+  const sel = $("port"), keep = sel.value, outs = [...midi.outputs.values()];
+  sel.innerHTML = "";
+  for (const o of outs) sel.add(new Option(o.name, o.id));
+  const fm = outs.find(o => o.id === keep) || outs.find(o => /fm-?1|m-?vave|fomni|felucca|composite|sinco|usb-midi/i.test(o.name));
+  if (fm) sel.value = fm.id;
+  if (!outs.length) sel.add(new Option("No MIDI outputs: plug in the FM-1", ""));
+}
+async function send(bytes, ok) {
+  try {
+    (await outPort()).send([...SX, ...bytes, 0xF7]);
+    status(ok);
+  } catch (e) {
+    status(e.message || String(e), true);
+  }
+}
+$("send").onclick = () => {
+  const cs = songChords().filter(x => x[1]).slice(0, MAX).map(x => x[1]);
+  if (!cs.length) { status("No chords to send: get them from a sheet or type them in step 2.", true); return; }
+  send([SET, ...cs.map(c => c.root * 9 + c.type)], `Sent ${cs.length} chords. The FM-1 shows SONG CHORDS ${cs.length}.`);
+};
+$("top").onclick = () => send([TOP], "Back to the first chord.");
+$("clear").onclick = () => send([SET], "Song cleared on the FM-1.");
+navigator.requestMIDIAccess && navigator.permissions?.query({name: "midi", sysex: true})
+  .then(p => { if (p.state === "granted") outPort().catch(() => {}); }).catch(() => {});
+</script>
+</body>
+</html>

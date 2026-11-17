@@ -28,3 +28,5 @@ page = page.replace("/*LIB*/", lib).replace("/*META*/", '{"version": "0", "produ
 check("installer", re.search(r'<script type="module">(.*?)</script>', page, re.S).group(1), True)
 emu = (SRC / "web" / "emu" / "index.html").read_text(encoding="utf-8")
 check("emulator", re.search(r"<script>(.*?)</script>", emu, re.S).group(1), False)
+song = (SRC / "web" / "song" / "index.html").read_text(encoding="utf-8")
+check("song", re.search(r"<script>(.*?)</script>", song, re.S).group(1), False)

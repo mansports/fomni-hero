@@ -14,6 +14,7 @@
  *   spin ENC N                   N detents at once, exactly N (no acceleration)
  *   master N                     MASTER pot 0..4096
  *   midi B0 B1 B2                incoming USB MIDI message (hex bytes)
+ *   sysex B..                    incoming USB SysEx, the bytes between F0 and F7 (hex)
  *   wav FILE | wavstop           start / stop recording the output
  *   peakreset                    restart the output peak (expect peak_db_min / peak_db_max)
  *   shot FILE.png                save the screen
@@ -400,6 +401,14 @@ static int expect(const char *what, const char *val)
         got = ui.type;
     else if (!strcmp(what, "pad"))
         got = ui.pad;
+    else if (!strcmp(what, "song_pos"))
+        got = song_pos;
+    else if (!strcmp(what, "song_n"))
+        got = proj.song_n;
+    else if (!strcmp(what, "song_pad"))
+        got = song_pad;
+    else if (!strcmp(what, "song_mods"))
+        got = song_mods;
     else if (!strcmp(what, "hold"))
         got = proj.hold;
     else if (!strcmp(what, "sync"))
@@ -557,6 +566,20 @@ int main(int argc, char **argv)
             uint32_t s = (uint32_t)strtoul(a, 0, 16), d1 = (uint32_t)strtoul(b, 0, 16), d2 = (uint32_t)strtoul(c, 0, 16);
             uint32_t cin = s >= 0xF0 ? 0x0F : s >> 4;
             min_q[mi_w++ % MQ] = cin | s << 8 | d1 << 16 | d2 << 24;
+        } else if (!strcmp(cmd, "sysex")) {         /* sysex HEX..: a SysEx from USB (the bytes between F0 and F7) */
+            uint8_t sx[300];
+            uint32_t sn = 0;
+            char *q = line + 5;
+            while (sn < sizeof sx) {
+                char *e;
+                unsigned long v = strtoul(q, &e, 16);
+                if (e == q)
+                    break;
+                sx[sn++] = (uint8_t)v;
+                q = e;
+            }
+            if (!ann_frame(sx, sn, now_ms))
+                ui_song_frame(sx, sn);
         } else if (!strcmp(cmd, "wav")) {
             snprintf(out, sizeof out, "%s/%s", dir, a);
             wav_open(out);

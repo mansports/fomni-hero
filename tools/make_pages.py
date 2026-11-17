@@ -178,6 +178,7 @@ def main(pkg, version, out):
         raise SystemExit("no build/emu/reader/: the emulator's screen reader comes from fm1-reader "
                          "(clone github.com/charlesvestal/fm1-reader next to this repo, or set FM1_READER), then web/emu/build.sh")
     shutil.copytree(emu, out / "emu")
+    shutil.copytree(SRC / "web" / "song", out / "song")       # SONG: a chord sheet to the FM-1
     # the screen reader's words files (fm1-reader): every one ever made, for the devices that point at them
     shutil.copytree(SRC / "web" / "words", out / "words")
     (out / ".nojekyll").write_text("")

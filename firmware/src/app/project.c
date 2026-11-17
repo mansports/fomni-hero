@@ -41,6 +41,9 @@ static int project_valid(void)
     for (i = 0; i < NPADS; i++)
         if (proj.pad_root[i] > 11u || proj.pad_type[i] >= CH_NTYPES)
             return 0;
+    for (i = 0; i < proj.song_n; i++)            /* a bad song is dropped, not the whole project */
+        if (proj.song[i] >= 12u * CH_NTYPES)
+            proj.song_n = 0;
     return 1;
 }
 

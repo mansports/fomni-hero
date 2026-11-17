@@ -12,6 +12,7 @@
 #define PROJ_MAGIC 0x494E4D4Fu           /* "OMNI" */
 #define PROJ_FORMAT 2u                   /* 2: Lo-fi's slot became Chord rev (0.2); a format 1 loads */
 #define NPADS 11                         /* the black keys: chord buttons */
+#define SONG_MAX 255                     /* chords in a song */
 
 typedef struct {
     uint32_t magic, format;
@@ -21,6 +22,10 @@ typedef struct {
     uint8_t sync;                        /* SYNC START: the rhythm starts with the first chord */
     uint8_t leds;                        /* lights: 0 off, 1 keys and the buttons' glow, 2 keys only */
     uint8_t rsv[13];                     /* room to grow: an older, shorter project loads (zeros here) */
+    /* SONG (web/song/): the chords of a song in order, each root * CH_NTYPES + type, the root as the
+     * screen names it (after transpose). song_n 0: no song. A project from before has none (zeros). */
+    uint8_t song_n;
+    uint8_t song[SONG_MAX];
 } project_t;
 
 extern project_t proj;
@@ -35,3 +40,4 @@ void ui_frame(void);
 void ui_input_only(void);
 int ui_dirty(void);
 void ui_say(const char *a, const char *b);
+int ui_song_frame(const uint8_t *p, uint32_t n);   /* a received SysEx (between F0 and F7): 1 if it was a song's */
