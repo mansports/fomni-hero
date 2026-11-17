@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# The site on GitHub Pages (tools/make_pages.py): the installer with the release's package, and the Song page.
+# After each release (the build workflow for a tag), so a fork gets its own installer: open
+# https://USER.github.io/fm1-fomni/install/ in Chrome (Android too) with the FM-1 on USB.
+# Settings > Pages > Source: GitHub Actions. Without Emscripten here, the site leaves out the emulator.
+name: Publish the site
+
+on:
+  workflow_run:
+    workflows: ['Build and attest firmware']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v0.4.2-song)'
+        required: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  site:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.event.workflow_run.head_branch }}
+      - name: The release's package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          mkdir -p dl
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'omni-*.fwsc' --dir dl
+          ls dl
+      - name: Make the site
+        env:
+          TAG: ${{ github.event.inputs.tag || github.event.workflow_run.head_branch }}
+          OMNI_NO_EMU: '1'
+        run: |
+          set -euo pipefail
+          pkg=$(ls dl/omni-*.fwsc | grep -v -- '-app' | head -1)
+          python3 tools/make_pages.py "$pkg" "${TAG#v}" site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

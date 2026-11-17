@@ -240,11 +240,13 @@ static void sound_chord(void) { om_chord(ui.root, ui.type); }
 /* SONG: a song's chords, sent over USB from web/song/ (pasted from a chord site). Playing the chord it
  * waits for (its root: a C7 for a C will do) moves it on, and the black key of the next one blinks, with
  * ENV / LFO when that chord needs them. The chord after next played instead skips one (a missed change);
- * anything else waits. ENV + LFO held 1.5 s with no chord: from the top. */
+ * anything else waits. ENV + LFO held 1.5 s with no chord: from the top. Sent with SONG_SET_KEYS, the
+ * song's chords go on the black keys in the order they come (the player's own chords kept, and back when a
+ * song comes without); more than 11: one key a root, its minor / 7th / m7 with ENV / LFO. */
 #define SONG_SX0 0x7Du                           /* F0 7D 53 47 cmd .. F7 ("SG"); 7D: non-commercial */
 #define SONG_SX1 0x53u
 #define SONG_SX2 0x47u
-enum { SONG_SET = 1, SONG_TOP = 2 };
+enum { SONG_SET = 1, SONG_TOP = 2, SONG_SET_KEYS = 3 };   /* 3: as 1, and the song's chords on the keys */
 static uint8_t song_pos;
 static int8_t song_pad = -1;                     /* the black key that blinks, -1 none */
 static uint8_t song_mods;                        /* and the modifiers that blink with it: 1 ENV, 2 LFO */
@@ -303,13 +305,72 @@ static void song_heard(void)                     /* a chord began (a button or M
     song_aim();
 }
 
+static void own_keys(void)                       /* the player's own chords back on the keys */
+{
+    int i;
+    if (!proj.keys_song)
+        return;
+    for (i = 0; i < NPADS; i++) {
+        proj.pad_root[i] = proj.own_root[i];
+        proj.pad_type[i] = proj.own_type[i];
+    }
+    proj.keys_song = 0;
+}
+
+static void song_keys(void)                      /* the song's chords on the keys, in the order they come */
+{
+    uint8_t u[SONG_MAX], rt[12], ty[12];
+    int nu = 0, nr = 0, i, j, k, tr = proj.par[P_TRANSPOSE];
+    if (!proj.keys_song) {
+        for (i = 0; i < NPADS; i++) {
+            proj.own_root[i] = proj.pad_root[i];
+            proj.own_type[i] = proj.pad_type[i];
+        }
+        proj.keys_song = 1;
+    }
+    for (i = 0; i < NPADS; i++) {                /* keys the song leaves free: the player's own */
+        proj.pad_root[i] = proj.own_root[i];
+        proj.pad_type[i] = proj.own_type[i];
+    }
+    for (i = 0; i < proj.song_n; i++) {
+        for (j = 0; j < nu && u[j] != proj.song[i]; j++)
+            ;
+        if (j == nu)
+            u[nu++] = proj.song[i];
+    }
+    if (nu <= NPADS) {
+        for (i = 0; i < nu; i++) {
+            proj.pad_root[i] = (uint8_t)(((u[i] / CH_NTYPES - tr) % 12 + 12) % 12);
+            proj.pad_type[i] = (uint8_t)(u[i] % CH_NTYPES);
+        }
+        return;
+    }
+    for (i = 0; i < nu; i++) {                   /* too many: a key a root, the rest with ENV / LFO */
+        int r = u[i] / CH_NTYPES, t = u[i] % CH_NTYPES, mod = t == CH_MIN || t == CH_7 || t == CH_M7;
+        for (j = 0; j < nr && rt[j] != r; j++)
+            ;
+        if (j == nr) {
+            rt[nr] = (uint8_t)r;
+            ty[nr++] = (uint8_t)t;
+        } else if (!mod && (ty[j] == CH_MIN || ty[j] == CH_7 || ty[j] == CH_M7)) {
+            ty[j] = (uint8_t)t;                  /* a type ENV / LFO can't make wins the key */
+        } else if (mod && ty[j] != t && (ty[j] == CH_MIN || ty[j] == CH_7 || ty[j] == CH_M7)) {
+            ty[j] = CH_MAJ;                      /* two of minor / 7th / m7: the major, both by modifier */
+        }
+    }
+    for (k = 0; k < nr && k < NPADS; k++) {      /* 12 roots: the last one has no key */
+        proj.pad_root[k] = (uint8_t)(((rt[k] - tr) % 12 + 12) % 12);
+        proj.pad_type[k] = ty[k];
+    }
+}
+
 int ui_song_frame(const uint8_t *p, uint32_t n)
 {
     uint32_t i, c;
     char t[8];
     if (n < 4u || p[0] != SONG_SX0 || p[1] != SONG_SX1 || p[2] != SONG_SX2)
         return 0;
-    if (p[3] == SONG_SET) {
+    if (p[3] == SONG_SET || p[3] == SONG_SET_KEYS) {
         c = n - 4u;
         if (c > SONG_MAX)
             c = SONG_MAX;
@@ -321,6 +382,10 @@ int ui_song_frame(const uint8_t *p, uint32_t n)
         for (i = 0; i < c; i++)
             proj.song[i] = p[4 + i];
         proj.song_n = (uint8_t)c;
+        if (p[3] == SONG_SET_KEYS && c)
+            song_keys();
+        else
+            own_keys();
         mark_dirty();
         itoa_u(c, t);
         if (c)

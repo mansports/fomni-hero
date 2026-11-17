@@ -97,3 +97,57 @@ sysex 7D 53 47 01
 wait 50
 expect song_n 0
 expect song_pad -1
+# SONG_SET_KEYS (03): the song's chords on the black keys in the order they come, the rest the player's own
+# C Am F G7 C: keys C Am F G7, then Am Em G7 E7 D7 Bb A7 as they were
+sysex 7D 53 47 03 00 52 2D 41 00
+wait 50
+expect keys_song 1
+expect pad_root0 0
+expect pad_type0 0
+expect pad_root1 9
+expect pad_type1 1
+expect pad_root2 5
+expect pad_root3 7
+expect pad_type3 2
+expect pad_root4 9
+expect song_pad 0
+expect song_mods 0
+tapkey b0
+wait 50
+expect root 0
+expect song_pad 1
+expect song_mods 0
+shot song_keys.png
+# a new song with keys: laid out from the player's own again (not from the last song's)
+sysex 7D 53 47 03 2D
+wait 50
+expect pad_root0 5
+expect pad_root1 0
+expect pad_root2 7
+# kept through a power cycle
+wait 5000
+reboot
+wait 100
+expect keys_song 1
+expect pad_root0 5
+# a song without keys (01): the player's own back
+sysex 7D 53 47 01 00 2D
+wait 50
+expect keys_song 0
+expect pad_root0 5
+expect pad_root1 0
+expect pad_type3 1
+# 13 chords on 12 roots (more than 11): a key a root, A as A (Am, A7 by ENV / LFO), Bsus4 not B7
+# C C#m D Ebdim E F F#m G Ab Am A7 B7 Bsus4
+sysex 7D 53 47 03 00 0A 12 20 24 2D 37 3F 48 52 53 65 6A
+wait 50
+expect pad_root9 9
+expect pad_type9 0
+expect pad_root10 11
+expect pad_type10 7
+# cleared: the player's own back
+sysex 7D 53 47 01
+wait 50
+expect keys_song 0
+expect pad_root0 5
+expect pad_type3 1

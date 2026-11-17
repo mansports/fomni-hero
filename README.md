@@ -75,14 +75,16 @@ The drums on channel 10:
 ### Song
 
 `web/song/index.html` (Chrome or Edge, the FM-1 on USB): paste a song from a chord site and send its chords to
-the FM-1. Then, as you play, the black key of the next chord blinks, with ENV and LFO blinking too when it needs
+the FM-1. Its chords go on the black keys in the order they first come (your own come back when you clear the
+song, or send one without "Put the song's chords on the black keys"; more than 11 chords: a key for each root,
+the minor and 7th with ENV and LFO). Then, as you play, the black key of the next chord blinks, with ENV and LFO blinking too when it needs
 the minor, the 7th or both, and the screen shows NEXT and the chord. Playing the chord's root moves it on (a C7
 does for a C); playing the chord after next skips one; anything else waits. At the end it goes back to the top,
 and holding ENV and LFO for 1.5 seconds with no chord does too. The song is saved with the rest.
 
 Chords FoMni-1 has no type for are played as the nearest one (Em9 as Em7, D/F# as D, Dsus2 as D); the page
 lists them. The SysEx: `F0 7D 53 47 01 chords.. F7`, each chord one byte, root × 9 + type (root 0 = C, as the
-screen names it; types in `firmware/src/dsp/omni.h`), up to 255; `F0 7D 53 47 02 F7` goes back to the top.
+screen names it; types in `firmware/src/dsp/omni.h`), up to 255; `03` in place of `01` puts them on the keys too; `F0 7D 53 47 02 F7` goes back to the top.
 
 ### Screen reader
 

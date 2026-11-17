@@ -26,6 +26,8 @@ typedef struct {
      * screen names it (after transpose). song_n 0: no song. A project from before has none (zeros). */
     uint8_t song_n;
     uint8_t song[SONG_MAX];
+    uint8_t keys_song;                   /* 1: the black keys hold the song's chords; the player's own are kept here: */
+    uint8_t own_root[NPADS], own_type[NPADS];
 } project_t;
 
 extern project_t proj;

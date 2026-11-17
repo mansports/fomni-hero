@@ -17,6 +17,7 @@ The package must be a release build (./build.sh --release X.Y): its identity, FM
 the installer checks the download against and what the FM-1 reports after the install."""
 import html
 import json
+import os
 import re
 import shutil
 import sys
@@ -26,7 +27,7 @@ SRC = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SRC / "web"))
 from make_site import product_of, strip_module  # noqa: E402  (Felucca's: the package format)
 
-REPO = "https://github.com/charlesvestal/fm1-fomni"
+REPO = "https://github.com/" + os.environ.get("GITHUB_REPOSITORY", "charlesvestal/fm1-fomni")   # a fork: its own
 
 LANDING = """<!doctype html>
 <html lang="en">
@@ -93,6 +94,7 @@ bass hold the harmony, and the OM-84's ten rhythms can play them in time.</p>
 <div class="status"><strong>Version __VERSION__.</strong> You install and remove it the same way as Felucca and
 X0X, and the installer can always put M-VAVE's own firmware back. Install at your own risk.</div>
 <nav class="ways" aria-label="Get FoMni-1">
+  <a href="song/"><strong>Song</strong><span>Paste a song from a chord site and send it to the FM-1: its chords go on the black keys, and the next one blinks as you play.</span></a>
   <a href="emu/"><strong>Try it in the browser</strong><span>Play it right here, with sound: drag across the white keys to strum. It runs the same code as the FM-1, so you don't need one.</span></a>
   <a href="install/"><strong>Install</strong><span>Connect your FM-1 by USB and install from Chrome or Edge. There's nothing to install on your computer.</span></a>
   <a href="firmware/__PKG__"><strong>Download __PKG__</strong><span>For the command-line installer: <code>python3 tools/fm1_install.py __PKG__</code></span></a>
@@ -172,12 +174,17 @@ def main(pkg, version, out):
     (out / "index.html").write_text(LANDING.replace("__VERSION__", html.escape(version)).replace("__PKG__", name)
                                     .replace("__REPO__", REPO), encoding="utf-8")
     emu = SRC / "build" / "emu"
-    if not (emu / "omni.wasm").exists():
-        raise SystemExit("no build/emu/omni.wasm: run web/emu/build.sh (needs Emscripten)")
-    if not (emu / "reader" / "words.js").exists():
-        raise SystemExit("no build/emu/reader/: the emulator's screen reader comes from fm1-reader "
-                         "(clone github.com/charlesvestal/fm1-reader next to this repo, or set FM1_READER), then web/emu/build.sh")
-    shutil.copytree(emu, out / "emu")
+    if os.environ.get("OMNI_NO_EMU") and not (emu / "omni.wasm").exists():
+        print("site: no emulator (OMNI_NO_EMU): emu/ left out")
+        idx = out / "index.html"           # and no links to it
+        idx.write_text(re.sub(r'\s*<a href="emu/">.*?</a>', "", idx.read_text(encoding="utf-8")), encoding="utf-8")
+    else:
+        if not (emu / "omni.wasm").exists():
+            raise SystemExit("no build/emu/omni.wasm: run web/emu/build.sh (needs Emscripten)")
+        if not (emu / "reader" / "words.js").exists():
+            raise SystemExit("no build/emu/reader/: the emulator's screen reader comes from fm1-reader "
+                             "(clone github.com/charlesvestal/fm1-reader next to this repo, or set FM1_READER), then web/emu/build.sh")
+        shutil.copytree(emu, out / "emu")
     shutil.copytree(SRC / "web" / "song", out / "song")       # SONG: a chord sheet to the FM-1
     # the screen reader's words files (fm1-reader): every one ever made, for the devices that point at them
     shutil.copytree(SRC / "web" / "words", out / "words")

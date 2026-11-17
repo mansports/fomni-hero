@@ -401,6 +401,12 @@ static int expect(const char *what, const char *val)
         got = ui.type;
     else if (!strcmp(what, "pad"))
         got = ui.pad;
+    else if (!strncmp(what, "pad_root", 8))
+        got = proj.pad_root[atoi(what + 8) % NPADS];
+    else if (!strncmp(what, "pad_type", 8))
+        got = proj.pad_type[atoi(what + 8) % NPADS];
+    else if (!strcmp(what, "keys_song"))
+        got = proj.keys_song;
     else if (!strcmp(what, "song_pos"))
         got = song_pos;
     else if (!strcmp(what, "song_n"))

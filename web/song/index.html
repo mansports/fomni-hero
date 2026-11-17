@@ -34,9 +34,10 @@
 <body>
 <main>
   <h1>Song</h1>
-  <p class="small">Paste a chord sheet, send its chords to FoMni-1. As you play, the black key of the next chord blinks
+  <p class="small">Paste a chord sheet, send its chords to FoMni-1. They go on the black keys in the order they come
+    (your own chords come back when you clear it). As you play, the black key of the next chord blinks
     (with ENV / LFO when it needs the minor or the 7th). Hold ENV + LFO for 1.5 s to go back to the top.
-    Chrome or Edge, with the FM-1 on USB.</p>
+    Chrome (Android or computer) or Edge, with the FM-1 on USB.</p>
 
   <h2>1 · Paste the chord sheet</h2>
   <textarea id="sheet" placeholder="Copy a song from a chord site and paste it here: chords above the lyrics, [C]inline chords, or just C Am F G" aria-label="Chord sheet"></textarea>
@@ -51,6 +52,7 @@
 
   <h2>3 · Send it</h2>
   <select id="port" aria-label="MIDI output"></select>
+  <div class="row"><label><input type="checkbox" id="keys" checked> Put the song's chords on the black keys</label></div>
   <div class="row">
     <button id="send">Send to FM-1</button>
     <button id="top" class="quiet">From the top</button>
@@ -65,7 +67,7 @@ const NOTE = {C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11};
 const NAMES = ["C", "C#", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B"];
 const TYPES = ["", "m", "7", "M7", "m7", "dim", "aug", "sus4", "add9"];
 const MAJ = 0, MIN = 1, DOM7 = 2, MAJ7 = 3, MIN7 = 4, DIM = 5, AUG = 6, SUS4 = 7, ADD9 = 8;
-const SX = [0xF0, 0x7D, 0x53, 0x47], SET = 1, TOP = 2, MAX = 255;
+const SX = [0xF0, 0x7D, 0x53, 0x47], SET = 1, TOP = 2, SET_KEYS = 3, MAX = 255;
 
 /* the quality after the root: [type, exact] */
 function quality(q) {
@@ -179,10 +181,11 @@ async function send(bytes, ok) {
 $("send").onclick = () => {
   const cs = songChords().filter(x => x[1]).slice(0, MAX).map(x => x[1]);
   if (!cs.length) { status("No chords to send: get them from a sheet or type them in step 2.", true); return; }
-  send([SET, ...cs.map(c => c.root * 9 + c.type)], `Sent ${cs.length} chords. The FM-1 shows SONG CHORDS ${cs.length}.`);
+  send([$("keys").checked ? SET_KEYS : SET, ...cs.map(c => c.root * 9 + c.type)],
+       `Sent ${cs.length} chords. The FM-1 shows SONG CHORDS ${cs.length}.`);
 };
 $("top").onclick = () => send([TOP], "Back to the first chord.");
-$("clear").onclick = () => send([SET], "Song cleared on the FM-1.");
+$("clear").onclick = () => send([SET], "Song cleared on the FM-1: your own chords are back on the keys.");
 navigator.requestMIDIAccess && navigator.permissions?.query({name: "midi", sysex: true})
   .then(p => { if (p.state === "granted") outPort().catch(() => {}); }).catch(() => {});
 </script>
